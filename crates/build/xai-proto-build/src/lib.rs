@@ -104,12 +104,27 @@ impl XaiProtoBuilder {
         includes: impl IntoIterator<Item = &'a Path>,
     ) -> anyhow::Result<()> {
         let includes = Vec::from_iter(includes);
+        let protos = Vec::from_iter(protos);
 
         if let Some(protoc) = protoc {
             println!(
                 "cargo:rerun-if-changed={}",
                 protoc.to_str().context("protoc path not UTF-8")?
             );
+        }
+
+        // Fork patch (crayton/grok-build): /dev/stdout and /dev/null don't
+        // exist on Windows, so the protoc dependency-scan below can't run
+        // there. It only powers incremental-rebuild hints — emit hints for
+        // the proto inputs themselves instead and skip protoc entirely.
+        if cfg!(windows) {
+            for proto in &protos {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    proto.to_str().context("proto path not UTF-8")?
+                );
+            }
+            return Ok(());
         }
 
         // Can only process one input file when using --dependency_out=FILE.
