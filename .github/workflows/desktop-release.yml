@@ -1,0 +1,72 @@
+# Desktop-app release builds of the grok CLI (fork: crayton/grok-build).
+#
+# Why this exists: the Event I/O desktop app installs grok as a pinned native
+# binary. Building from our own fork means CLI behavior changes only when WE
+# merge upstream — no more silent breakage from registry "latest".
+#
+# Targets: darwin-arm64 (the dev Mac) + win32-x64 (the Win 11 test box).
+# Upstream calls Windows builds "best-effort" — this workflow is where we find
+# out, per commit, whether that holds.
+#
+# Trigger: manual (workflow_dispatch) or a `desktop-v*` tag. Tag runs also
+# publish the binaries to a GitHub release of the same name.
+name: desktop-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: grok-darwin-arm64
+            binary: xai-grok-pager
+          - os: windows-latest
+            artifact: grok-win32-x64.exe
+            binary: xai-grok-pager.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # proto codegen resolves bin/protoc via DotSlash OR a protoc on PATH —
+      # in CI the PATH route is simplest.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # rustup picks up rust-toolchain.toml (1.92.0) automatically on first use.
+      - name: Build release binary
+        run: cargo build -p xai-grok-pager-bin --release
+
+      - name: Stage artifact
+        shell: bash
+        run: cp "target/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
+
+      - name: Smoke test (--version)
+        shell: bash
+        run: ./${{ matrix.artifact }} --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+      - name: Publish to release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" \
+            --notes "grok CLI desktop build (fork of xai-org/grok-build)" 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}" --clobber
